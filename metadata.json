@@ -1,6 +1,6 @@
 {
-  "name": "Remix: MeydiAi",
-  "description": "Automated AI video creation tool for microstock artists, generating MP4 content from JS Canvas and Remotion templates.",
+  "name": "MeydiAi",
+  "description": "Meydi OS: Platform kreatif & produktivitas bertenaga AI dengan fitur Template Studio, asisten cerdas, serta monitoring jaringan lanjutan.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

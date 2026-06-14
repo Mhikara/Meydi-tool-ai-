@@ -5,9 +5,10 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [ProjectDraft::class], version = 2, exportSchema = false)
+@Database(entities = [ProjectDraft::class, VideoJob::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun draftDao(): DraftDao
+    abstract fun videoJobDao(): VideoJobDao
 
     companion object {
         @Volatile

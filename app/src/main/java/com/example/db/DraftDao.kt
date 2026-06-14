@@ -17,6 +17,9 @@ interface DraftDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDraft(draft: ProjectDraft)
 
-    @Query("UPDATE project_drafts SET promptInput = :prompt, codeContent = :code, timestamp = :timestamp WHERE id = :id")
-    suspend fun updateDraft(id: Int, prompt: String, code: String, timestamp: Long = System.currentTimeMillis())
+    @Query("UPDATE project_drafts SET promptInput = :prompt, codeContent = :code, selectedTemplateId = :templateId, timestamp = :timestamp WHERE id = :id")
+    suspend fun updateDraft(id: Int, prompt: String, code: String, templateId: String?, timestamp: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM project_drafts WHERE id = :id")
+    suspend fun deleteDraftById(id: Int)
 }

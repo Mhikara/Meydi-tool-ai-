@@ -10,6 +10,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Initialize centralized api key registry with applicationContext
+        com.example.api.ApiKeyRegistry.init(this)
+        
         // Edge to Edge content padding and status line styling
         enableEdgeToEdge()
         

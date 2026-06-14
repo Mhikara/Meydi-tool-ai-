@@ -10,6 +10,7 @@ data class ProjectDraft(
     val projectTitle: String,
     val promptInput: String,
     val codeContent: String,
+    val selectedTemplateId: String? = null,
     val userEmail: String,
     val timestamp: Long = System.currentTimeMillis()
 )

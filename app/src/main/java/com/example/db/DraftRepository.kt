@@ -16,7 +16,11 @@ class DraftRepository(private val draftDao: DraftDao) {
         draftDao.insertDraft(draft)
     }
 
-    suspend fun updateDraft(id: Int, prompt: String, code: String) {
-        draftDao.updateDraft(id, prompt, code)
+    suspend fun updateDraft(id: Int, prompt: String, code: String, templateId: String?) {
+        draftDao.updateDraft(id, prompt, code, templateId)
+    }
+
+    suspend fun deleteDraft(id: Int) {
+        draftDao.deleteDraftById(id)
     }
 }

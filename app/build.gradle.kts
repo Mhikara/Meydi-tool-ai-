@@ -119,3 +119,109 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }
+
+tasks.register("checkBraces") {
+    doLast {
+        val file = file("src/main/java/com/example/ui/MeydiAiApp.kt")
+        if (!file.exists()) {
+            println("File does not exist")
+            return@doLast
+        }
+        val lines = file.readLines()
+        var inComment = false
+        var inString = false
+        var inMultilineString = false
+        
+        data class BraceInfo(val lineNum: Int, val charIndex: Int, val lineText: String)
+        val stack = mutableListOf<BraceInfo>()
+        
+        for (i in lines.indices) {
+            val lineNum = i + 1
+            val rawLine = lines[i]
+            // We want to scan character by character but handle escaped chars, string literals, and comments
+            var q = 0
+            while (q < rawLine.length) {
+                val c = rawLine[q]
+                
+                // Handle triple quotes multiline strings
+                if (!inComment && !inString) {
+                    if (rawLine.startsWith("\"\"\"", q)) {
+                        inMultilineString = !inMultilineString
+                        q += 3
+                        continue
+                    }
+                }
+                
+                if (inMultilineString) {
+                    if (rawLine.startsWith("\"\"\"", q)) {
+                        inMultilineString = false
+                        q += 3
+                        continue
+                    }
+                    q++
+                    continue
+                }
+                
+                if (inComment) {
+                    if (rawLine.startsWith("*/", q)) {
+                        inComment = false
+                        q += 2
+                        continue
+                    }
+                    q++
+                    continue
+                }
+                
+                if (inString) {
+                    if (c == '\\') {
+                        q += 2 // skip escape character
+                        continue
+                    }
+                    if (c == '"') {
+                        inString = false
+                    }
+                    q++
+                    continue
+                }
+                
+                // Check for single line comments
+                if (rawLine.startsWith("//", q)) {
+                    break // Ignore of of line
+                }
+                
+                // Check for start of block comment
+                if (rawLine.startsWith("/*", q)) {
+                    inComment = true
+                    q += 2
+                    continue
+                }
+                
+                if (c == '"') {
+                    inString = true
+                    q++
+                    continue
+                }
+                
+                if (c == '{') {
+                    stack.add(BraceInfo(lineNum, q + 1, rawLine.trim()))
+                } else if (c == '}') {
+                    if (stack.isNotEmpty()) {
+                        stack.removeAt(stack.size - 1)
+                    } else {
+                        println("Line ${lineNum}: Unmatched closing brace '}' found at char ${q+1}")
+                    }
+                }
+                q++
+            }
+        }
+        
+        if (stack.isNotEmpty()) {
+            println("Unmatched open braces:")
+            stack.forEach { brace ->
+                println("Line ${brace.lineNum}: '${brace.lineText}'")
+            }
+        } else {
+            println("All braces are perfectly balanced!")
+        }
+    }
+}
