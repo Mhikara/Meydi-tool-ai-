@@ -52,7 +52,21 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.utils.AppUpdateChecker
+import com.example.utils.AppUpdateInfo
+import com.example.utils.AutoUpdateDialog
+import androidx.compose.ui.window.Dialog
 import com.example.api.GeminiGenerator
+import com.example.ai.ui.AIHDEnhancementDashboard
+import com.example.ai.ui.viewmodel.AIHDViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.subscription.ui.SubscriptionScreen
+import com.example.subscription.ui.viewmodel.SubscriptionViewModel
+import com.example.payment.ui.PaymentScreen
+import com.example.payment.ui.viewmodel.PaymentViewModel
+import com.example.payment.manager.PaymentModule
+import com.example.core.Kernel
+import com.example.subscription.manager.SubscriptionModule
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -76,23 +90,43 @@ import androidx.compose.foundation.lazy.items
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.viewmodel.WorkspaceViewModel
+import com.example.rbac.model.UserRole
+import com.example.rbac.model.UserStatus
+import com.example.rbac.viewmodel.RbacViewModel
+import com.example.rbac.ui.*
+import com.example.auth.ui.viewmodel.AuthViewModel
+import com.example.auth.ui.*
+
 
 // Screen enumeration routes
 enum class Screen {
     SPLASH,
     LOGIN,
+    REGISTER,
+    FORGOT_PASSWORD,
+    EMAIL_VERIFICATION,
+    PROFILE,
     HOME,
     WORKSPACE_REMOTION,
     AI_AUTO_CLIPPER,
+    IMAGE_CLIPPER,
+    VIDEO_CLIPPER,
     MEDIA_DOWNLOADER,
     HD_ENHANCER,
     PROMPT_GENERATOR,
     ADMIN_DASHBOARD,
     SECURITY_DASHBOARD,
+    ENCRYPTION_DASHBOARD,
     OWNER_DASHBOARD,
     AI_ASSISTANT,
     AI_TEMPLATE_STUDIO,
-    NETWORK_MONITOR
+    NETWORK_MONITOR,
+    SYSTEM_MAINTENANCE,
+    UPDATE_MANAGER,
+    PRIVACY_POLICY,
+    API_MANAGEMENT,
+    SUBSCRIPTION,
+    PAYMENT
 }
 
 @Composable
@@ -949,11 +983,17 @@ fun MeydiAiApp() {
         }
     }
 
-    val userPrefs = context.getSharedPreferences("UserPrefs", android.content.Context.MODE_PRIVATE)
-    val autoLoginEnabled = userPrefs.getBoolean("auto_login_enabled", true)
+    val sessionManager = remember { com.example.security.SessionManager(context) }
+    val rbacViewModel: com.example.rbac.viewmodel.RbacViewModel = viewModel()
+    val rbacUser by rbacViewModel.currentUserState.collectAsState()
+    
+    val authViewModel: AuthViewModel = viewModel()
+    val authState by authViewModel.authState.collectAsStateWithLifecycle()
+
+
     var currentUserEmail by remember { 
         mutableStateOf(
-            if (autoLoginEnabled) (userPrefs.getString("logged_in_email", null) ?: "guest")
+            if (sessionManager.isAutoLoginEnabled()) sessionManager.getSession().email
             else "guest"
         ) 
     }
@@ -962,9 +1002,50 @@ fun MeydiAiApp() {
     }
     var showLoginNotificationFromOwner by remember { mutableStateOf(false) }
 
+    LaunchedEffect(authState) {
+        when (val state = authState) {
+            is com.example.auth.model.AuthState.Authenticated -> {
+                if (!state.user.isEmailVerified) {
+                    currentScreen = Screen.EMAIL_VERIFICATION
+                } else if (currentScreen == Screen.LOGIN || currentScreen == Screen.REGISTER || currentScreen == Screen.SPLASH) {
+                    currentScreen = Screen.HOME
+                    currentUserEmail = state.user.email
+                    rbacViewModel.refreshActiveUserProfile()
+                    authViewModel.updateFcmToken()
+                }
+            }
+            is com.example.auth.model.AuthState.Unauthenticated -> {
+                if (currentScreen != Screen.SPLASH && currentScreen != Screen.REGISTER && currentScreen != Screen.FORGOT_PASSWORD) {
+                    currentScreen = Screen.LOGIN
+                    currentUserEmail = "guest"
+                }
+            }
+            else -> {}
+        }
+    }
+
     // Role Logic
-    val isOwner = currentUserEmail == "meydihikara@gmail.com"
+    val isOwner = rbacUser?.role == "owner" || currentUserEmail == "meydihikara@gmail.com"
     val isIosUser = currentUserEmail == "meydi_ios@icloud.com" || currentUserEmail?.endsWith("@icloud.com") == true
+
+    LaunchedEffect(currentScreen, rbacUser) {
+        val eval = com.example.rbac.middleware.RbacMiddleware.evaluateScreenAccess(rbacUser, currentScreen)
+        when (eval) {
+            is com.example.rbac.middleware.MiddlewareResult.Redirect -> {
+                Toast.makeText(context, eval.reason, Toast.LENGTH_LONG).show()
+                currentScreen = eval.destination
+            }
+            is com.example.rbac.middleware.MiddlewareResult.Block -> {
+                Toast.makeText(context, eval.reason, Toast.LENGTH_LONG).show()
+                rbacViewModel.logout()
+                sessionManager.clearSession()
+                currentUserEmail = "guest"
+                currentScreen = Screen.LOGIN
+            }
+            com.example.rbac.middleware.MiddlewareResult.Allow -> { /* Allowed */ }
+        }
+    }
+
     
     // Auto Permissions Setup (Penyimpanan dan Kamera)
     val requiredPermissions = if (android.os.Build.VERSION.SDK_INT >= 33) {
@@ -1026,6 +1107,19 @@ fun MeydiAiApp() {
         mutableStateOf(sharedPrefs.getString("system_alert", "") ?: "")
     }
 
+    var updateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    
+    LaunchedEffect(Unit) {
+        try {
+            val info = AppUpdateChecker.checkForUpdate(context)
+            if (info != null) {
+                updateInfo = info
+            }
+        } catch (e: Exception) {
+            // Abaikan error jaringan
+        }
+    }
+
     fun addAdmin(newEmail: String) {
         val newSet = adminEmails + newEmail
         adminEmails = newSet
@@ -1045,7 +1139,7 @@ fun MeydiAiApp() {
     }
 
     fun logout() {
-        userPrefs.edit().remove("logged_in_email").apply()
+        sessionManager.clearSession()
         currentUserEmail = "guest"
         currentScreen = Screen.LOGIN
     }
@@ -1071,39 +1165,52 @@ fun MeydiAiApp() {
                 when (screen) {
                     Screen.SPLASH -> SplashScreen(
                         onSplashComplete = {
-                            currentScreen = if (autoLoginEnabled && userPrefs.contains("logged_in_email")) {
-                                Screen.HOME
-                            } else {
-                                Screen.LOGIN
+                            if (authState is com.example.auth.model.AuthState.Unauthenticated) {
+                                currentScreen = Screen.LOGIN
+                            } else if (authState is com.example.auth.model.AuthState.Authenticated) {
+                                currentScreen = Screen.HOME
                             }
                         }
                     )
-                    Screen.LOGIN -> ModernLoginScreen(onLoginSuccess = { email -> 
-                        val emailStr = email ?: "guest"
-                        if(emailStr != "guest") {
-                            userPrefs.edit().putString("logged_in_email", emailStr).apply()
+                    Screen.LOGIN -> ModernLoginScreen(
+                        onLoginSuccess = { 
+                            if (it != null && it != "guest") {
+                                currentUserEmail = it
+                                currentScreen = Screen.HOME 
+                            } else {
+                                currentScreen = Screen.HOME
+                            }
                         }
-                        currentUserEmail = emailStr
-                        
-                        // Automatically record this login session in the notifications list
-                        val timeNow = java.text.SimpleDateFormat("dd MMM yyyy, HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                        val osVersion = android.os.Build.VERSION.RELEASE
-                        val deviceModel = android.os.Build.MODEL
-                        val loggedInString = "Sesi Akun: $emailStr | Waktu: $timeNow | Perangkat: $deviceModel (Android $osVersion) | Status: ONLINE"
-                        
-                        val notifPrefs = context.getSharedPreferences("LoginNotificationPrefs", android.content.Context.MODE_PRIVATE)
-                        val existingLogs = notifPrefs.getStringSet("login_logs", emptySet()) ?: emptySet()
-                        val updatedLogs = existingLogs.toMutableSet()
-                        updatedLogs.add(loggedInString)
-                        notifPrefs.edit().putStringSet("login_logs", updatedLogs).apply()
-                        
-                        // Trigger the pop-up notification from the owner
-                        showLoginNotificationFromOwner = true
-                        
-                        currentScreen = Screen.HOME 
-                    })
+                    )
+                    Screen.REGISTER -> RegisterContent(
+                        onRegisterSuccess = { 
+                            if (it != null) {
+                                currentUserEmail = it
+                                currentScreen = Screen.HOME
+                            }
+                        },
+                        onNavigateLogin = { currentScreen = Screen.LOGIN }
+                    )
+                    Screen.FORGOT_PASSWORD -> ForgotPasswordContent(
+                        onNavigateLogin = { currentScreen = Screen.LOGIN }
+                    )
+                    Screen.EMAIL_VERIFICATION -> EmailVerificationScreen(
+                        onVerificationSuccess = { currentScreen = Screen.HOME },
+                        onLogout = { 
+                            authViewModel.logout()
+                            currentScreen = Screen.LOGIN
+                        }
+                    )
+                    Screen.PROFILE -> {
+                        ProfileScreen(
+                            viewModel = authViewModel,
+                            onNavigateToSubscription = { currentScreen = Screen.SUBSCRIPTION },
+                            onNavigateToPrivacyPolicy = { currentScreen = Screen.PRIVACY_POLICY },
+                            onBack = { currentScreen = Screen.HOME }
+                        )
+                    }
                     Screen.HOME -> OSDesktopScreen(
-                        isAdmin = currentUserEmail in adminEmails,
+                        isAdmin = rbacUser?.role == "admin" || rbacUser?.role == "owner" || currentUserEmail in adminEmails,
                         isOwner = isOwner,
                         isIosUser = isIosUser,
                         systemAlertMessage = systemAlertMessage,
@@ -1111,8 +1218,10 @@ fun MeydiAiApp() {
                         onRequestPermissions = { showPermissionDialog = true },
                         onNavigateToAdmin = { currentScreen = Screen.ADMIN_DASHBOARD },
                         onNavigateToSecurity = { currentScreen = Screen.SECURITY_DASHBOARD },
+                        onNavigateToEncryption = { currentScreen = Screen.ENCRYPTION_DASHBOARD },
                         onNavigateToOwner = { currentScreen = Screen.OWNER_DASHBOARD },
                         onLogout = { logout() },
+                        onNavigateToProfile = { currentScreen = Screen.PROFILE },
                         onNavigateToRemotion = { currentScreen = Screen.WORKSPACE_REMOTION },
                         onNavigateToClipper = { currentScreen = Screen.AI_AUTO_CLIPPER },
                         onNavigateToDownloader = { currentScreen = Screen.MEDIA_DOWNLOADER },
@@ -1121,36 +1230,59 @@ fun MeydiAiApp() {
                         onSelectTemplate = { template -> selectTemplate(template) },
                         onNavigateToAssistant = { currentScreen = Screen.AI_ASSISTANT },
                         onNavigateToTemplateStudio = { currentScreen = Screen.AI_TEMPLATE_STUDIO },
-                        onNavigateToNetworkMonitor = { currentScreen = Screen.NETWORK_MONITOR }
+                        onNavigateToNetworkMonitor = { currentScreen = Screen.NETWORK_MONITOR },
+                        onNavigateToUpdateManager = { currentScreen = Screen.UPDATE_MANAGER },
+                        onNavigateToApiManagement = { currentScreen = Screen.API_MANAGEMENT }
                     )
                     Screen.SECURITY_DASHBOARD -> SecurityDashboardScreen(
                         onBack = { currentScreen = Screen.HOME }
                     )
-                    Screen.ADMIN_DASHBOARD -> AdminDashboardScreen(
-                        adminEmails = adminEmails.toList(),
-                        systemAlertMessage = systemAlertMessage,
-                        onAddAdmin = { email -> addAdmin(email) },
-                        onRemoveAdmin = { email -> removeAdmin(email) },
-                        onUpdateSystemAlert = { msg -> updateSystemAlert(msg) },
+                    Screen.ENCRYPTION_DASHBOARD -> EncryptionDashboardScreen(
                         onBack = { currentScreen = Screen.HOME }
                     )
-                    Screen.OWNER_DASHBOARD -> OwnerDashboardScreen(
-                        userEmail = currentUserEmail,
-                        onBack = { currentScreen = Screen.HOME }
-                    )
+                    Screen.ADMIN_DASHBOARD -> {
+                        RbacAdminDashboardScreen(
+                            viewModel = rbacViewModel,
+                            onBack = { currentScreen = Screen.HOME }
+                        )
+                    }
+                    Screen.OWNER_DASHBOARD -> {
+                        com.example.admin.ui.OwnerDashboardScreen(
+                            onBack = { currentScreen = Screen.HOME }
+                        )
+                    }
+
+
                     Screen.WORKSPACE_REMOTION -> RemotionWorkspaceScreen(
                         userEmail = currentUserEmail,
                         onBack = { currentScreen = Screen.HOME }
                     )
-                    Screen.AI_AUTO_CLIPPER -> AiClipperScreen(
+                    Screen.AI_AUTO_CLIPPER -> com.example.autoclipper.ui.AutoClipperDashboardScreen(
+                        onNavigateToImageClipper = { currentScreen = Screen.IMAGE_CLIPPER },
+                        onNavigateToVideoClipper = { currentScreen = Screen.VIDEO_CLIPPER },
                         onBack = { currentScreen = Screen.HOME }
                     )
-                    Screen.MEDIA_DOWNLOADER -> MediaDownloaderScreen(
+                    Screen.IMAGE_CLIPPER -> com.example.autoclipper.ui.ImageClipperScreen(
+                        onBack = { currentScreen = Screen.AI_AUTO_CLIPPER }
+                    )
+                    Screen.VIDEO_CLIPPER -> com.example.autoclipper.ui.VideoClipperScreen(
+                        onBack = { currentScreen = Screen.AI_AUTO_CLIPPER }
+                    )
+                    Screen.MEDIA_DOWNLOADER -> com.example.downloader.ui.UniversalDownloaderScreen(
                         onBack = { currentScreen = Screen.HOME }
                     )
-                    Screen.HD_ENHANCER -> HdEnhancerScreen(
-                        onBack = { currentScreen = Screen.HOME }
-                    )
+                    Screen.HD_ENHANCER -> {
+                        val aiHdViewModel: AIHDViewModel = viewModel()
+                        val subModule = remember { Kernel.get<SubscriptionModule>("core.subscription") }
+                        val subInfo by subModule?.repository?.subscriptionInfo?.collectAsState() ?: mutableStateOf(null)
+                        
+                        AIHDEnhancementDashboard(
+                            viewModel = aiHdViewModel,
+                            isPremium = subInfo?.isPremiumActive ?: false,
+                            onNavigateBack = { currentScreen = Screen.HOME },
+                            onNavigateToUpgrade = { currentScreen = Screen.SUBSCRIPTION }
+                        )
+                    }
                     Screen.PROMPT_GENERATOR -> PromptGeneratorScreen(
                         onBack = { currentScreen = Screen.HOME }
                     )
@@ -1164,7 +1296,60 @@ fun MeydiAiApp() {
                     Screen.NETWORK_MONITOR -> NetworkMonitorScreen(
                         onBack = { currentScreen = Screen.HOME }
                     )
+                    Screen.SYSTEM_MAINTENANCE -> SystemMaintenanceDashboard(
+                        onBack = { currentScreen = Screen.HOME }
+                    )
+                    Screen.UPDATE_MANAGER -> com.example.update.ui.UpdateDashboardScreen(
+                        onBack = { currentScreen = Screen.HOME }
+                    )
+                    Screen.PRIVACY_POLICY -> com.example.ui.PrivacyPolicyScreen(
+                        onBack = { currentScreen = Screen.PROFILE }
+                    )
+                    Screen.API_MANAGEMENT -> {
+                        com.example.centralapi.ui.CentralApiDashboardScreen(
+                            onBack = { currentScreen = Screen.HOME }
+                        )
+                    }
+                    Screen.SUBSCRIPTION -> {
+                        val subModule = remember { Kernel.get<SubscriptionModule>("core.subscription") }
+                        if (subModule != null) {
+                            val subViewModel = remember { SubscriptionViewModel(subModule.repository) }
+                            SubscriptionScreen(
+                                viewModel = subViewModel,
+                                onSelectPlan = { plan ->
+                                    val payModule = Kernel.get<com.example.payment.manager.PaymentModule>("core.payment")
+                                    if (payModule != null) {
+                                        currentScreen = Screen.PAYMENT
+                                        val payViewModel = com.example.payment.ui.viewmodel.PaymentViewModel(payModule.repository, subModule.repository, authViewModel.repository)
+                                        payViewModel.startPayment(plan, plan.price)
+                                    }
+                                },
+                                onBack = { currentScreen = Screen.PROFILE }
+                            )
+                        }
+                    }
+                    Screen.PAYMENT -> {
+                        val payModule = remember { Kernel.get<com.example.payment.manager.PaymentModule>("core.payment") }
+                        val subModule = remember { Kernel.get<SubscriptionModule>("core.subscription") }
+                        if (payModule != null && subModule != null) {
+                            val payViewModel = remember { PaymentViewModel(payModule.repository, subModule.repository, authViewModel.repository) }
+                            
+                            PaymentScreen(
+                                viewModel = payViewModel,
+                                onSuccess = { currentScreen = Screen.PROFILE },
+                                onBack = { currentScreen = Screen.SUBSCRIPTION }
+                            )
+                        }
+                    }
                 }
+            }
+
+            // Auto Update Overlay
+            updateInfo?.let { info ->
+                AutoUpdateDialog(
+                    updateInfo = info,
+                    onDismiss = { updateInfo = null }
+                )
             }
 
             // Global Floating AI Assistant Button (Visible on Home)
@@ -3110,6 +3295,7 @@ fun getFileNameAndSize(context: android.content.Context, uri: android.net.Uri): 
 fun RemotionWorkspaceScreen(userEmail: String, onBack: () -> Unit, viewModel: WorkspaceViewModel = viewModel()) {
     val context = LocalContext.current
     var showDialog by remember { mutableStateOf(false) }
+    var showBackupLogsDialog by remember { mutableStateOf(false) }
     var isSidebarVisible by remember { mutableStateOf(true) }
     var selectedCategory by remember { mutableStateOf("All") }
     var searchQuery by remember { mutableStateOf("") }
@@ -3118,9 +3304,15 @@ fun RemotionWorkspaceScreen(userEmail: String, onBack: () -> Unit, viewModel: Wo
     val savedTemplateId by viewModel.selectedTemplateId.collectAsStateWithLifecycle()
     val lastSavedTime by viewModel.lastSavedTime.collectAsStateWithLifecycle()
     val isBackingUp by viewModel.isBackingUp.collectAsStateWithLifecycle()
+    val autoSaveStatus by viewModel.autoSaveStatus.collectAsStateWithLifecycle()
+    val recoveryAvailable by viewModel.recoveryAvailable.collectAsStateWithLifecycle()
+    val localDraftToRecover by viewModel.localDraftToRecover.collectAsStateWithLifecycle()
+    val cloudDraftToRecover by viewModel.cloudDraftToRecover.collectAsStateWithLifecycle()
 
     val microstockMetadataMap by viewModel.microstockMetadataMap.collectAsStateWithLifecycle()
     val microstockLoadingMap by viewModel.microstockLoadingMap.collectAsStateWithLifecycle()
+
+    val backupLogs by com.example.utils.BackupLogger.logs.collectAsStateWithLifecycle()
 
     var customAssetUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var customAssetBase64 by remember { mutableStateOf<String?>(null) }
@@ -3415,15 +3607,48 @@ fun RemotionWorkspaceScreen(userEmail: String, onBack: () -> Unit, viewModel: Wo
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    Text(
-                        text = if (isBackingUp) "Menyimpan ke Perangkat Lokal ($userEmail)..." 
-                               else if (autoSaveEnabled) "● AUTO-SAVED ACTIVE" 
-                               else if (lastSavedTime != null) "Tersimpan Lokal: ($userEmail)" 
-                               else "Draft Baru",
-                        color = if (autoSaveEnabled) NeonPurple else TerminalGreen.copy(alpha=0.7f),
-                        fontSize = 10.sp,
-                        fontWeight = if (autoSaveEnabled) FontWeight.Bold else FontWeight.Normal
-                    )
+                     Row(
+                         verticalAlignment = Alignment.CenterVertically,
+                         modifier = Modifier
+                             .clip(RoundedCornerShape(6.dp))
+                             .clickable { showBackupLogsDialog = true }
+                             .padding(vertical = 2.dp, horizontal = 4.dp)
+                     ) {
+                         val statusText = when (autoSaveStatus) {
+                             com.example.viewmodel.AutoSaveStatus.SAVING -> "⏳ Menyimpan..."
+                             com.example.viewmodel.AutoSaveStatus.SAVED -> "🟢 Tersimpan"
+                             com.example.viewmodel.AutoSaveStatus.FAILED -> "🔴 Gagal menyimpan"
+                             com.example.viewmodel.AutoSaveStatus.PENDING_SYNC -> "🟠 Menunggu sinkronisasi (Offline)"
+                         }
+                         val statusColor = when (autoSaveStatus) {
+                             com.example.viewmodel.AutoSaveStatus.SAVING -> Color(0xFFFFD700) // Neon Yellow
+                             com.example.viewmodel.AutoSaveStatus.SAVED -> Color(0xFF00FFCC) // Neon Teal / Green
+                             com.example.viewmodel.AutoSaveStatus.FAILED -> Color(0xFFFF3366) // Neon Red
+                             com.example.viewmodel.AutoSaveStatus.PENDING_SYNC -> Color(0xFF7F00FF) // Neon Purple
+                         }
+                         Text(
+                             text = statusText,
+                             color = statusColor,
+                             fontSize = 10.sp,
+                             fontWeight = FontWeight.Bold
+                         )
+                         if (lastSavedTime != null) {
+                             Spacer(modifier = Modifier.width(6.dp))
+                             val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(lastSavedTime!!))
+                             Text(
+                                 text = "• Ref: $timeStr ℹ️",
+                                 color = Color.Gray,
+                                 fontSize = 10.sp
+                             )
+                         } else {
+                             Spacer(modifier = Modifier.width(4.dp))
+                             Text(
+                                 text = "ℹ️",
+                                 color = Color.Gray,
+                                 fontSize = 10.sp
+                             )
+                         }
+                     }
                 }
                 
                 IconButton(
@@ -5538,6 +5763,255 @@ fun RemotionWorkspaceScreen(userEmail: String, onBack: () -> Unit, viewModel: Wo
                     fontSize = 13.sp,
                     lineHeight = 18.sp
                 )
+            }
+        )
+    }
+
+    if (recoveryAvailable && localDraftToRecover != null && cloudDraftToRecover != null) {
+        AlertDialog(
+            onDismissRequest = { /* Force user choice to resolve conflict */ },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.resolveConflictUseLocal("REMOTION", userEmail)
+                    }
+                ) {
+                    Text("Gunakan Lokal", color = Color.Gray)
+                }
+            },
+            containerColor = MidnightSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = "Sync Conflict",
+                        tint = NeonTeal,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Auto Recovery & Conflict",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Sistem mendeteksi draf lokal offline dan draf cloud online memiliki perbedaan waktu edit. Silakan pilih draf mana yang ingin dipulihkan:",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp
+                    )
+                    
+                    // Local Option Card
+                    val localTimeStr = java.text.SimpleDateFormat("dd MMM yyyy, HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(localDraftToRecover!!.timestamp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.resolveConflictUseLocal("REMOTION", userEmail) }
+                            .border(1.dp, NeonPurple.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
+                        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Save, contentDescription = null, tint = NeonPurple, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Versi Lokal (Aman Offline)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Waktu Edit: $localTimeStr", color = Color.Gray, fontSize = 11.sp)
+                            Text("Panjang Kode: ${localDraftToRecover!!.codeContent.length} karakter", color = Color.Gray, fontSize = 11.sp)
+                        }
+                    }
+
+                    // Cloud Option Card
+                    val cloudTimeStr = java.text.SimpleDateFormat("dd MMM yyyy, HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(cloudDraftToRecover!!.timestamp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.resolveConflictUseCloud("REMOTION", userEmail) }
+                            .border(1.dp, NeonTeal.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
+                        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Cloud, contentDescription = null, tint = NeonTeal, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Versi Cloud (Sinkronisasi Server)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Waktu Edit: $cloudTimeStr", color = Color.Gray, fontSize = 11.sp)
+                            Text("Panjang Kode: ${cloudDraftToRecover!!.codeContent.length} karakter", color = Color.Gray, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    if (showBackupLogsDialog) {
+        AlertDialog(
+            onDismissRequest = { showBackupLogsDialog = false },
+            confirmButton = {
+                Button(
+                    onClick = { showBackupLogsDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = NeonPurple)
+                ) {
+                    Text("Tutup", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.forceSaveCurrent("REMOTION", userEmail)
+                        Toast.makeText(context, "Memicu pencadangan instan...", Toast.LENGTH_SHORT).show()
+                    }
+                ) {
+                    Text("Backup Sekarang", color = NeonTeal, fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = MidnightSurface,
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Cloud,
+                            contentDescription = "Cloud Console",
+                            tint = NeonTeal,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Cloud Backup Console",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                    }
+                    IconButton(
+                        onClick = { com.example.utils.BackupLogger.clear() }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Hapus Log",
+                            tint = Color.Gray,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Setiap perubahan kode/prompt diamankan lokal (SQLite) & diunggah terenkripsi (AES) ke cloud saat online.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+
+                    // Live Connection Indicator Card
+                    val isConnected = viewModel.autoSaveStatus.value != com.example.viewmodel.AutoSaveStatus.PENDING_SYNC
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.03f)),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(if (isConnected) Color(0xFF00FFCC) else Color(0xFFFF3366), CircleShape)
+                            )
+                            Text(
+                                text = if (isConnected) "Status: Online (Sinkron Berjalan)" else "Status: Offline (Pending Sync)",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Log Aktivitas Terbaru (Debugging):",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF07040C)), // Dark Terminal Background
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        if (backupLogs.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Belum ada aktivitas terekam.",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.padding(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(backupLogs) { log ->
+                                    val logColor = when (log.type) {
+                                        "SUCCESS" -> Color(0xFF00FFCC) // Teal
+                                        "ERROR" -> Color(0xFFFF3366) // Neon Red
+                                        "SYNC" -> Color(0xFF7F00FF) // Purple
+                                        else -> Color(0xFFFFD700) // Gold
+                                    }
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Text(
+                                            text = "[${log.formattedTime}]",
+                                            color = Color.Gray,
+                                            fontSize = 9.sp,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                        )
+                                        Text(
+                                            text = "[${log.type}]",
+                                            color = logColor,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                        )
+                                        Text(
+                                            text = log.message,
+                                            color = Color.White.copy(alpha = 0.9f),
+                                            fontSize = 10.sp,
+                                            lineHeight = 14.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         )
     }
@@ -8864,860 +9338,6 @@ data class DownloadQueueItem(
     val status: String
 )
 
-fun saveDownloadQueue(context: android.content.Context, queue: List<DownloadQueueItem>) {
-    com.example.utils.LocalDataStorage(context).saveQueue(queue)
-}
-
-fun loadDownloadQueue(context: android.content.Context): List<DownloadQueueItem> {
-    return com.example.utils.LocalDataStorage(context).loadQueue()
-}
-
-@Composable
-fun MediaDownloaderScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    var urlInput by remember { mutableStateOf("") }
-    var selectedMediaType by remember { mutableStateOf("Video") } // "Video" or "Image"
-    
-    var isDownloading by remember { mutableStateOf(false) }
-    var downloadProgress by remember { mutableFloatStateOf(0f) }
-    var downloadStatus by remember { mutableStateOf("Menunggu URL...") }
-    
-    // Automation States
-    var isSimulationOffline by remember { mutableStateOf(false) }
-    var isRealOnline by remember { mutableStateOf(true) }
-    val isOnline = isRealOnline && !isSimulationOffline
-    
-    var downloadQueue by remember { mutableStateOf(loadDownloadQueue(context)) }
-    
-    var activeDownloadingItemId by remember { mutableStateOf<String?>(null) }
-    var activeDownloadProgress by remember { mutableFloatStateOf(0f) }
-    var activeDownloadStatus by remember { mutableStateOf("") }
-    
-    val coroutineScope = rememberCoroutineScope()
-    val keyboardController = LocalSoftwareKeyboardController.current
-
-    // Observe real network status
-    LaunchedEffect(Unit) {
-        while (true) {
-            var connected = false
-            try {
-                val connectivityManager = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
-                if (connectivityManager != null) {
-                    val activeNetwork = connectivityManager.activeNetwork
-                    if (activeNetwork != null) {
-                        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
-                        connected = capabilities?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-                    }
-                } else {
-                    connected = true
-                }
-            } catch (e: SecurityException) {
-                connected = true
-            } catch (e: Exception) {
-                connected = true
-            }
-            isRealOnline = connected
-            delay(2000)
-        }
-    }
-
-    // Automatically trigger downloads of pending items when the engine detects active internet connection
-    LaunchedEffect(isOnline, downloadQueue) {
-        if (isOnline) {
-            val pendingItems = downloadQueue.filter { it.status == "Pending" }
-            if (pendingItems.isNotEmpty() && activeDownloadingItemId == null) {
-                coroutineScope.launch {
-                    Toast.makeText(context, "MeydiAI Engine: Koneksi Pulih! Memulai download otomatis ${pendingItems.size} antrean...", Toast.LENGTH_LONG).show()
-                    
-                    for (item in pendingItems) {
-                        activeDownloadingItemId = item.id
-                        activeDownloadProgress = 0f
-                        activeDownloadStatus = "Menghubungkan ke API ${item.platform}..."
-                        
-                        // Update status to Downloading
-                        downloadQueue = downloadQueue.map {
-                            if (it.id == item.id) it.copy(status = "Downloading") else it
-                        }
-                        saveDownloadQueue(context, downloadQueue)
-                        
-                        val response = com.example.api.AzbryDownloader.fetchMedia(item.url)
-                        if (response != null && response.status == true && response.result != null) {
-                            val mediaList = response.result.media
-                            if (mediaList != null && mediaList.isNotEmpty()) {
-                                val bestMedia = mediaList.firstOrNull { 
-                                    if (item.mediaType == "Image") {
-                                        it.type?.equals("image", ignoreCase = true) == true || it.type?.equals("photo", ignoreCase = true) == true
-                                    } else {
-                                        it.type?.equals("video", ignoreCase = true) == true || it.type?.equals("audio", ignoreCase = true) == true
-                                    }
-                                } ?: mediaList.firstOrNull { it.type?.equals("video", ignoreCase = true) == true }
-                                  ?: mediaList.firstOrNull { it.type?.equals("image", ignoreCase = true) == true }
-                                  ?: mediaList.first()
-                                activeDownloadStatus = "Media Ditemukan: ${response.result.title ?: "Tanpa Judul"}"
-                                delay(600)
-                                while (activeDownloadProgress < 1f) {
-                                    delay(40)
-                                    activeDownloadProgress += 0.05f
-                                }
-                                
-                                // Trigger actual storage save
-                                autoSaveMediaToDevice(
-                                    context,
-                                    "MeydiAI_Auto_${item.platform}",
-                                    if (bestMedia.type == "image") "image" else "video",
-                                    bestMedia.url
-                                )
-                                
-                                // Update state to Finished / Success
-                                downloadQueue = downloadQueue.map {
-                                    if (it.id == item.id) it.copy(status = "Success") else it
-                                }
-                            } else {
-                                downloadQueue = downloadQueue.map {
-                                    if (it.id == item.id) it.copy(status = "Failed") else it
-                                }
-                            }
-                        } else {
-                            // Offline/Simulation mockup fallback
-                            delay(1200)
-                            activeDownloadStatus = "Mengunduh ${item.mediaType} HD (Simulasi): ${item.url.take(30)}..."
-                            while (activeDownloadProgress < 1f) {
-                                delay(60)
-                                activeDownloadProgress += 0.04f
-                            }
-                            autoSaveMediaToDevice(
-                                context,
-                                if (item.mediaType == "Video") "MeydiAI_Auto_Video" else "MeydiAI_Auto_Photo",
-                                if (item.mediaType == "Video") "video" else "image"
-                            )
-                            downloadQueue = downloadQueue.map {
-                                if (it.id == item.id) it.copy(status = "Success") else it
-                            }
-                        }
-                        saveDownloadQueue(context, downloadQueue)
-                        delay(1000)
-                    }
-                    activeDownloadingItemId = null
-                    Toast.makeText(context, "Semua unduhan otomatis selesai diproses! 🎉", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
-
-    fun startDownload() {
-        val trimmedUrl = urlInput.trim()
-        if (trimmedUrl.isBlank()) {
-            Toast.makeText(context, "URL tidak boleh kosong!", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        keyboardController?.hide()
-        
-        val isYouTube = trimmedUrl.contains("youtube.com", ignoreCase = true) || 
-                        trimmedUrl.contains("youtu.be", ignoreCase = true) || 
-                        trimmedUrl.contains("youtube-nocookie.com", ignoreCase = true)
-        val isTikTok = trimmedUrl.contains("tiktok.com", ignoreCase = true)
-        val isInstagram = trimmedUrl.contains("instagram.com", ignoreCase = true) || 
-                          trimmedUrl.contains("instagr.am", ignoreCase = true)
-        val isTwitter = trimmedUrl.contains("twitter.com", ignoreCase = true) || 
-                        trimmedUrl.contains("x.com", ignoreCase = true)
-        val isImage = trimmedUrl.contains(".jpg", ignoreCase = true) || 
-                      trimmedUrl.contains(".png", ignoreCase = true) || 
-                      trimmedUrl.contains(".jpeg", ignoreCase = true) || 
-                      trimmedUrl.contains(".webp", ignoreCase = true) || 
-                      trimmedUrl.contains("image", ignoreCase = true) || 
-                      trimmedUrl.contains("photo", ignoreCase = true)
-        
-        val platformName = when {
-            isYouTube -> "YouTube"
-            isTikTok -> "TikTok"
-            isInstagram -> "Instagram"
-            isTwitter -> "Twitter/X"
-            isImage -> "Image URL"
-            else -> "Raw URL"
-        }
-
-        // Generate unique item
-        val newItem = DownloadQueueItem(
-            id = "DL_${System.currentTimeMillis()}",
-            url = trimmedUrl,
-            mediaType = selectedMediaType,
-            platform = platformName,
-            timestamp = System.currentTimeMillis(),
-            status = if (isOnline) "Downloading" else "Pending"
-        )
-
-        // Add to queue
-        val currentList = downloadQueue.toMutableList()
-        currentList.add(0, newItem)
-        downloadQueue = currentList
-        saveDownloadQueue(context, downloadQueue)
-
-        if (!isOnline) {
-            Toast.makeText(context, "Sistem Offline Terdeteksi! Ditambahkan ke antrean otomasi.", Toast.LENGTH_LONG).show()
-            urlInput = ""
-            return
-        }
-
-        // Online Direct Download Flow
-        isDownloading = true
-        downloadProgress = 0f
-        
-        coroutineScope.launch {
-            downloadStatus = "Menghubungkan ke Server Azbry Engine..."
-            val response = com.example.api.AzbryDownloader.fetchMedia(trimmedUrl)
-            
-            if (response != null && response.status == true && response.result != null) {
-                val mediaList = response.result.media
-                if (mediaList != null && mediaList.isNotEmpty()) {
-                    val bestMedia = mediaList.firstOrNull { 
-                        if (selectedMediaType == "Image") {
-                            it.type?.equals("image", ignoreCase = true) == true || it.type?.equals("photo", ignoreCase = true) == true
-                        } else {
-                            it.type?.equals("video", ignoreCase = true) == true || it.type?.equals("audio", ignoreCase = true) == true
-                        }
-                    } ?: mediaList.firstOrNull { it.type?.equals("video", ignoreCase = true) == true }
-                      ?: mediaList.firstOrNull { it.type?.equals("image", ignoreCase = true) == true }
-                      ?: mediaList.first()
-                    downloadStatus = "Media Ditemukan: ${response.result.title ?: "Tanpa Judul"}"
-                    delay(800)
-                    
-                    downloadStatus = "Mengunduh file ${bestMedia.quality ?: ""}..."
-                    while (downloadProgress < 1f) {
-                        delay(50)
-                        downloadProgress += 0.05f
-                    }
-                    
-                    downloadStatus = "Berhasil! Media disimpan di Galeri perangkat."
-                    
-                    // Execute actual file writer helper with the retrieved media URL
-                    autoSaveMediaToDevice(
-                        context, 
-                        "MeydiAI_${platformName}_Download", 
-                        if (bestMedia.type == "image") "image" else "video",
-                        bestMedia.url
-                    )
-                    
-                    // Set downloaded item in queue as Success
-                    downloadQueue = downloadQueue.map {
-                        if (it.id == newItem.id) it.copy(status = "Success") else it
-                    }
-                } else {
-                    downloadStatus = "Gagal: Tidak ada media yang ditemukan."
-                    downloadQueue = downloadQueue.map {
-                        if (it.id == newItem.id) it.copy(status = "Failed") else it
-                    }
-                }
-            } else {
-                downloadStatus = "API Azbry gagal. Menggunakan MeydiAI Fallback..."
-                delay(1200)
-                downloadStatus = "Mengunduh ${selectedMediaType} dari ${platformName} (Simulasi)..."
-                while (downloadProgress < 1f) {
-                    delay(40)
-                    downloadProgress += 0.04f
-                }
-                
-                autoSaveMediaToDevice(
-                    context, 
-                    "MeydiAI_Fallback_${platformName}", 
-                    if (selectedMediaType == "Image") "image" else "video"
-                )
-                
-                downloadStatus = "Berhasil! Media disimpan di Galeri."
-                downloadQueue = downloadQueue.map {
-                    if (it.id == newItem.id) it.copy(status = "Success") else it
-                }
-            }
-            
-            saveDownloadQueue(context, downloadQueue)
-            
-            delay(2500)
-            
-            // Reset state
-            isDownloading = false
-            urlInput = ""
-            downloadProgress = 0f
-            downloadStatus = "Menunggu URL..."
-        }
-    }
-
-    fun clearQueue() {
-        downloadQueue = emptyList()
-        saveDownloadQueue(context, emptyList())
-        Toast.makeText(context, "Riwayat antrean dibersihkan!", Toast.LENGTH_SHORT).show()
-    }
-
-    Scaffold(
-        topBar = {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(Color(0xFF0F172A), Color.Transparent)
-                            )
-                        )
-                        .padding(horizontal = 12.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back Button",
-                            tint = Color.White
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "Media Downloader",
-                            color = Color.White,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                        Text(
-                            text = "Unduh HD dari URL secara otomatis",
-                            color = TerminalGreen,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-        },
-        containerColor = Color(0xFF0F172A)
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 20.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            
-            // 1. KONEKTIVITAS & OTOMASI STATUS CONSOLE
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp)
-                    .border(BorderStroke(1.dp, if (isOnline) TerminalGreen.copy(alpha = 0.3f) else Color(0xFFFF5252).copy(alpha = 0.3f)), RoundedCornerShape(14.dp)),
-                colors = CardDefaults.cardColors(containerColor = MidnightSurface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Status Mesin Unduhan",
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "Monitoring & Unduh Otomasi",
-                                color = TextMuted,
-                                fontSize = 11.sp
-                            )
-                        }
-                        
-                        // Status Badge
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(
-                                    if (isOnline) TerminalGreen.copy(alpha = 0.15f) 
-                                    else Color(0xFFFF5252).copy(alpha = 0.15f)
-                                )
-                                .border(1.dp, if (isOnline) TerminalGreen else Color(0xFFFF5252), RoundedCornerShape(20.dp))
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .clip(androidx.compose.foundation.shape.CircleShape)
-                                        .background(if (isOnline) TerminalGreen else Color(0xFFFF5252))
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (isOnline) "ONLINE" else "OFFLINE",
-                                    color = if (isOnline) TerminalGreen else Color(0xFFFF5252),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Black
-                                )
-                            }
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = DarkStroke, thickness = 1.dp)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    
-                    // Offline Simulator Toggle Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                            Text(
-                                text = "Simulasikan Mode Offline 🔌",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "Gunakan sakelar ini untuk menguji antrean offline otomatis saat terputus dari internet.",
-                                color = Color.LightGray.copy(alpha = 0.7f),
-                                fontSize = 10.sp,
-                                lineHeight = 13.sp
-                            )
-                        }
-                        Switch(
-                            checked = isSimulationOffline,
-                            onCheckedChange = { isSimulationOffline = it },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFFFF5252),
-                                checkedTrackColor = Color(0xFFFF5252).copy(alpha = 0.3f),
-                                uncheckedThumbColor = Color.Gray,
-                                uncheckedTrackColor = MidnightSurface
-                            )
-                        )
-                    }
-                }
-            }
-            
-            // 2. INPUT MEDIA DOWNLOADER
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 20.dp),
-                shape = RoundedCornerShape(20.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "Format Media",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    
-                    // MediaType Selector Buttons
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF0F172A))
-                            .padding(6.dp)
-                    ) {
-                        listOf("Video", "Image").forEach { type ->
-                            val isSelected = selectedMediaType == type
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) TerminalGreen else Color.Transparent)
-                                    .clickable { selectedMediaType = type }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if (type == "Video") "Video MP4 🎬" else "Gambar HD 📸",
-                                    color = if (isSelected) Color(0xFF0F172A) else Color(0xFF94A3B8),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(20.dp))
-                    
-                    Text(
-                        text = "Tautan Platform",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Platform Quick Badges
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(bottom = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        val quickPlatforms = listOf(
-                            Triple("TikTok", "https://vt.tiktok.com/ZS23abcd/", Color(0xFF25F4EE)),
-                            Triple("Instagram", "https://www.instagram.com/p/C_abc123/", Color(0xFFE1306C)),
-                            Triple("YouTube", "https://youtu.be/dQw4w9WgXcQ", Color(0xFFFF0000)),
-                            Triple("X / Twitter", "https://x.com/meydi/status/123456", Color(0xFF1DA1F2))
-                        )
-                        quickPlatforms.forEach { (name, demoUrl, color) ->
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(color.copy(alpha = 0.1f))
-                                    .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
-                                    .clickable { urlInput = demoUrl }
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = name,
-                                    color = color,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                    
-                    OutlinedTextField(
-                        value = urlInput,
-                        onValueChange = { urlInput = it },
-                        placeholder = { 
-                            Text(
-                                text = "Tempel tautan (URL) di sini...", 
-                                color = Color(0xFF64748B),
-                                fontSize = 13.sp
-                            ) 
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(86.dp),
-                        textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = Color(0xFF0F172A),
-                            unfocusedContainerColor = Color(0xFF0F172A),
-                            focusedBorderColor = TerminalGreen,
-                            unfocusedBorderColor = Color(0xFF334155)
-                        ),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { startDownload() }),
-                        enabled = !isDownloading
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Button(
-                        onClick = { startDownload() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(54.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isOnline) TerminalGreen else Color(0xFFFFB300),
-                            disabledContainerColor = Color(0xFF334155)
-                        ),
-                        enabled = !isDownloading && urlInput.isNotBlank()
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (isOnline) Icons.Default.CloudDownload else Icons.Default.Info, 
-                                contentDescription = "", 
-                                tint = Color(0xFF0F172A)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = if (isOnline) "Mulai Unduh Sekarang" else "Daftarkan Ke Antrean Offline",
-                                color = Color(0xFF0F172A),
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 15.sp
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 3. SEKSI RUNNING DOWNLOAD PROGRESS
-            if (isDownloading) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp)
-                        .border(BorderStroke(1.dp, TerminalGreen), RoundedCornerShape(14.dp)),
-                    colors = CardDefaults.cardColors(containerColor = MidnightSurface)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "Sedang Mengunduh Media Langsung",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        
-                        LinearProgressIndicator(
-                            progress = { downloadProgress },
-                            color = TerminalGreen,
-                            trackColor = ObsidianBg,
-                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(text = downloadStatus, color = TextMuted, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                            Text(text = "${(downloadProgress * 100).toInt()}%", color = TerminalGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
-            // 4. OTOMATIS RUNNING BACKGROUND SINKRON DI UI
-            if (activeDownloadingItemId != null) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp)
-                        .border(BorderStroke(1.dp, TerminalGreen.copy(alpha = 0.8f)), RoundedCornerShape(14.dp)),
-                    colors = CardDefaults.cardColors(containerColor = MidnightSurface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = TerminalGreen,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = "Sinkronisasi Otomatis Antrean Offline...",
-                                color = TerminalGreen,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
-                        LinearProgressIndicator(
-                            progress = { activeDownloadProgress },
-                            color = TerminalGreen,
-                            trackColor = ObsidianBg,
-                            modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp))
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = activeDownloadStatus,
-                            color = Color.LightGray,
-                            fontSize = 10.sp
-                        )
-                    }
-                }
-            }
-
-            // 5. RIWAYAT & DAFTAR ANTREAN OTOMASI (PERSISTED QUEUE)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Antrean & Riwayat Desentralisasi",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    val pendingCount = downloadQueue.count { it.status == "Pending" }
-                    if (pendingCount > 0) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFFFFB300))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "$pendingCount Tertunda",
-                                color = ObsidianBg,
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Black
-                            )
-                        }
-                    }
-                }
-                
-                if (downloadQueue.isNotEmpty()) {
-                    Text(
-                        text = "Bersihkan 🗑️",
-                        color = Color(0xFFFF5252),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable { clearQueue() }
-                    )
-                }
-            }
-
-            if (downloadQueue.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 32.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF1E293B))
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            modifier = Modifier
-                                .size(64.dp)
-                                .clip(androidx.compose.foundation.shape.CircleShape)
-                                .background(Color(0xFF0F172A)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CloudDownload, 
-                                contentDescription = "", 
-                                tint = Color(0xFF64748B), 
-                                modifier = Modifier.size(32.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Belum Ada Riwayat Unduhan",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Tempel tautan video/gambar dari platform mana saja untuk mulai mengunduh. File akan tersimpan langsung ke galeri.",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 12.sp,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 18.sp
-                        )
-                    }
-                }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    downloadQueue.forEach { item ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(
-                                    BorderStroke(
-                                        1.dp, 
-                                        when (item.status) {
-                                            "Pending" -> Color(0xFFFFB300).copy(alpha = 0.3f)
-                                            "Downloading" -> TerminalGreen.copy(alpha = 0.5f)
-                                            "Success" -> TerminalGreen.copy(alpha = 0.2f)
-                                            else -> Color.Gray.copy(alpha = 0.2f)
-                                        }
-                                    ), 
-                                    RoundedCornerShape(12.dp)
-                                ),
-                            colors = CardDefaults.cardColors(containerColor = MidnightSurface)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = if (item.mediaType == "Video") "ID Unduhan: Video MP4 🎬" else "ID Unduhan: Gambar HD 📸",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text(
-                                            text = item.url,
-                                            color = Color.LightGray.copy(alpha = 0.8f),
-                                            fontSize = 10.sp,
-                                            maxLines = 1,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                    
-                                    // Item status indicator
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(
-                                                when (item.status) {
-                                                    "Pending" -> Color(0xFFFFB300).copy(alpha = 0.15f)
-                                                    "Downloading" -> TerminalGreen.copy(alpha = 0.15f)
-                                                    "Success" -> TerminalGreen.copy(alpha = 0.1f)
-                                                    else -> Color.Gray.copy(alpha = 0.1f)
-                                                }
-                                            )
-                                            .padding(horizontal = 6.dp, vertical = 3.dp)
-                                    ) {
-                                        Text(
-                                            text = when (item.status) {
-                                                "Pending" -> "⏳ Pending Offline"
-                                                "Downloading" -> "🔄 Mengunduh..."
-                                                "Success" -> "✅ Tersimpan"
-                                                else -> item.status
-                                            },
-                                            color = when (item.status) {
-                                                "Pending" -> Color(0xFFFFB300)
-                                                "Downloading" -> TerminalGreen
-                                                "Success" -> TerminalGreen.copy(alpha = 0.8f)
-                                                else -> Color.Gray
-                                            },
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "Platform: ${item.platform}",
-                                        color = TextMuted,
-                                        fontSize = 9.sp
-                                    )
-                                    
-                                    val formattedTime = java.text.SimpleDateFormat("dd MMM, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(item.timestamp))
-                                    Text(
-                                        text = "Terdaftar: $formattedTime",
-                                        color = TextMuted,
-                                        fontSize = 9.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 @Composable
 fun InteractiveMediaComparisonSlider(
     mediaUri: Uri?,
@@ -12857,7 +12477,7 @@ data class SecurityPermissionItem(
 )
 
 @Composable
-fun SecurityDashboardScreen(onBack: () -> Unit) {
+fun SecurityDashboardScreen_Deprecated(onBack: () -> Unit) {
     val scrollState = rememberScrollState()
     val context = LocalContext.current
     val permPrefs = remember { context.getSharedPreferences("PermissionPrefs", android.content.Context.MODE_PRIVATE) }
@@ -15538,7 +15158,6 @@ fun OwnerDashboardScreen(userEmail: String, onBack: () -> Unit) {
 
 // Cross Platform & Common OS Intent Tools
 object CrossPlatformUtils {
-    const val COMMON_API_KEY = "AQ.Ab8RN6J0buZxOxaXUtiUZRbdd6J3KHfVa0wlU5ys8mlavFSscw"
     const val DOWNLOAD_API_URL = "https://api.azbry.com/api/download/allinone"
 
     // Berbagi teks (Share to WA, Email, or Other Apps / OS Ecosystems)

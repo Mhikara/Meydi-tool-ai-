@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - Meydi AI</title>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --heading-color: #111111;
+            --link-color: #007bff;
+            --border-color: #dddddd;
+            --muted-text: #666666;
+            --accent-color: #00ffcc; /* Neon Teal */
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #0d0f12;
+                --text-color: #cccccc;
+                --heading-color: #ffffff;
+                --link-color: #00ffcc;
+                --border-color: #333333;
+                --muted-text: #999999;
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        h1, h2, h3 {
+            color: var(--heading-color);
+            margin-top: 1.5em;
+            margin-bottom: 0.5em;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        h2 {
+            font-size: 1.8rem;
+            color: var(--link-color);
+        }
+
+        p, ul, li {
+            font-size: 1.1rem;
+        }
+
+        ul {
+            padding-left: 20px;
+        }
+
+        li {
+            margin-bottom: 10px;
+        }
+
+        a {
+            color: var(--link-color);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .last-updated {
+            color: var(--muted-text);
+            font-style: italic;
+            margin-bottom: 30px;
+        }
+
+        .contact-box {
+            background-color: rgba(0, 255, 204, 0.05);
+            border-left: 4px solid var(--accent-color);
+            padding: 20px;
+            margin-top: 30px;
+            border-radius: 4px;
+        }
+
+        .contact-box a {
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Kebijakan Privasi (Privacy Policy)</h1>
+        <p class="last-updated">Terakhir Diperbarui: 25 Juni 2026</p>
+
+        <p>Meydi AI ("kami") menghormati privasi Anda dan berkomitmen untuk melindungi data pribadi yang Anda bagikan saat menggunakan aplikasi Android kami ("Aplikasi"). Kebijakan Privasi ini menjelaskan bagaimana kami mengumpulkan, menggunakan, menyimpan, dan membagikan informasi Anda.</p>
+
+        <h2>1. Informasi yang Kami Kumpulkan</h2>
+        <p>Kami mengumpulkan jenis informasi berikut saat Anda menggunakan Aplikasi:</p>
+        <ul>
+            <li><strong>Informasi Profil:</strong> Jika Anda menggunakan fitur login, kami mengumpulkan nama, alamat email, dan foto profil Anda melalui otentikasi aman (misal: Google Sign-In, Firebase Auth).</li>
+            <li><strong>Konten yang Dibuat Pengguna:</strong> Teks, gambar, audio, atau video yang Anda unggah ke dalam Aplikasi secara eksplisit untuk diproses oleh layanan AI.</li>
+            <li><strong>Data Analitik dan Kerusakan:</strong> Informasi non-pribadi tentang perangkat Anda (model, OS), log kerusakan, dan data penggunaan umum untuk meningkatkan performa aplikasi melalui alat analitik standar (seperti Firebase Crashlytics & Analytics).</li>
+        </ul>
+
+        <h2>2. Bagaimana Kami Menggunakan Informasi Anda</h2>
+        <p>Data yang kami kumpulkan digunakan secara eksklusif untuk tujuan berikut:</p>
+        <ul>
+            <li>Menyediakan fungsi inti aplikasi, termasuk pemrosesan AI (Generasi Teks, Analisis Gambar, dll).</li>
+            <li>Mengamankan akun Anda dan mendeteksi aktivitas yang mencurigakan.</li>
+            <li>Memperbaiki bug dan mengoptimalkan performa aplikasi.</li>
+            <li>Mengirimkan notifikasi operasional (contoh: pemberitahuan proses latar belakang selesai).</li>
+        </ul>
+
+        <h2>3. Penggunaan Izin (Permissions) di Android</h2>
+        <p>Aplikasi mungkin meminta izin (permissions) pada perangkat Anda, yang hanya digunakan saat fitur terkait diaktifkan:</p>
+        <ul>
+            <li><strong>Kamera (Camera):</strong> Digunakan HANYA saat Anda memilih untuk mengambil foto atau video langsung dari dalam Aplikasi untuk dianalisis oleh AI.</li>
+            <li><strong>Penyimpanan (Storage / Media):</strong> Digunakan untuk membaca media yang Anda pilih secara manual untuk diproses, serta menyimpan hasil (gambar/video) kembali ke galeri Anda.</li>
+            <li><strong>Notifikasi (POST_NOTIFICATIONS):</strong> Digunakan untuk memberikan pemberitahuan lokal saat tugas pemrosesan (seperti unduhan atau komputasi AI) telah selesai.</li>
+        </ul>
+
+        <h2>4. Berbagi Data dengan Pihak Ketiga</h2>
+        <p>Kami TIDAK menjual data pribadi Anda. Data Anda hanya dibagikan secara aman kepada layanan pihak ketiga untuk kebutuhan operasional:</p>
+        <ul>
+            <li><strong>Google / Firebase (Cloud & Analytics):</strong> Untuk penyimpanan data akun, sistem login, dan pelaporan kerusakan (Crashlytics).</li>
+            <li><strong>Penyedia API AI (misal: Gemini API):</strong> Input yang Anda berikan dikirim ke penyedia API AI melalui koneksi terenkripsi (HTTPS). <em>Kami mengatur agar penyedia layanan AI tidak menggunakan data Anda untuk melatih model publik mereka jika memungkinkan.</em></li>
+        </ul>
+
+        <h2>5. Keamanan Data</h2>
+        <p>Kami memprioritaskan keamanan data Anda. Seluruh transmisi data antara aplikasi dan server pihak ketiga dienkripsi dengan standar industri (HTTPS/TLS). Data lokal yang sensitif, jika ada, dienkripsi sebelum disimpan ke dalam penyimpanan lokal perangkat.</p>
+
+        <h2>6. Hak Pengguna dan Penghapusan Data</h2>
+        <p>Sesuai dengan kebijakan Google Play (User Data Policy), Anda berhak untuk mengakses dan meminta penghapusan data Anda. Anda dapat secara mandiri menghapus akun Anda, yang secara permanen akan menghapus seluruh data Anda dari database cloud kami melalui <strong>Pengaturan Profil &gt; Hapus Akun</strong> di dalam aplikasi.</p>
+
+        <h2>7. Perubahan pada Kebijakan Privasi</h2>
+        <p>Kami mungkin memperbarui Kebijakan Privasi ini dari waktu ke waktu. Kami akan memberi tahu Anda mengenai perubahan apa pun dengan memperbarui tanggal "Terakhir Diperbarui" di bagian atas halaman ini, dan/atau memberikan pemberitahuan di dalam aplikasi.</p>
+
+        <div class="contact-box">
+            <h2>Hubungi Kami</h2>
+            <p>Jika Anda memiliki pertanyaan lebih lanjut mengenai Kebijakan Privasi ini atau ingin meminta pengelolaan data Anda, Anda dapat menghubungi kami melalui:</p>
+            <p><strong>Email:</strong> <a href="mailto:meydihikara@gmail.com">meydihikara@gmail.com</a></p>
+        </div>
+    </div>
+</body>
+</html>

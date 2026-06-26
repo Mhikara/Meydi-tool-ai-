@@ -130,6 +130,23 @@ object GeminiGenerator {
         return ApiKeyRegistry.getGeminiKey()
     }
 
+    suspend fun chat(prompt: String): String = withContext(Dispatchers.IO) {
+        val apiKey = getApiKey()
+        if (apiKey.isEmpty()) return@withContext "API Key not configured."
+
+        val request = GenerateContentRequest(
+            contents = listOf(Content(parts = listOf(Part(text = prompt)))),
+            generationConfig = GenerationConfig(temperature = 0.7f)
+        )
+
+        try {
+            val response = RetrofitClient.service.generateCode(apiKey, request)
+            return@withContext response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text ?: "Empty response"
+        } catch (e: Exception) {
+            return@withContext "Error: ${e.message}"
+        }
+    }
+
     suspend fun analyzeTemplateForMicrostock(templateTitle: String, templateDescription: String): MicrostockMetadata? = withContext(Dispatchers.IO) {
         val apiKey = getApiKey()
         if (apiKey.isEmpty()) return@withContext null

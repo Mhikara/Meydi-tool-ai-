@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function to get the current user's data from /users/{uid}
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Helper function to check if current user is an Owner
+    function isOwner() {
+      return isAuthenticated() && (
+        getUserData().role == "owner" || 
+        request.auth.token.email == "meydihikara@gmail.com"
+      );
+    }
+
+    // Helper function to check if current user is an Admin
+    function isAdmin() {
+      return isAuthenticated() && (
+        getUserData().role == "admin" || 
+        getUserData().role == "owner" ||
+        request.auth.token.email == "meydihikara@gmail.com"
+      );
+    }
+
+    // Rules for the 'users' collection
+    match /users/{userId} {
+      
+      // Allow read if user is authenticated and is the owner of the profile, or has Admin/Owner role
+      allow read: if isAuthenticated() && (
+        request.auth.uid == userId || 
+        isAdmin()
+      );
+
+      // Allow creation of a new profile for themselves upon registration
+      allow create: if isAuthenticated() && 
+        request.auth.uid == userId && 
+        request.resource.data.role == "user" && // Force default role to "user" to prevent escalation
+        request.resource.data.status == "active";
+
+      // Allow updates based on exact role permissions
+      allow update: if isAuthenticated() && (
+        // 1. Owner can modify any field on any user
+        isOwner() ||
+        
+        // 2. Admin can modify other standard users, but cannot elevate themselves to owner, nor modify admins/owners
+        (isAdmin() && 
+         resource.data.role != "owner" && 
+         resource.data.role != "admin" &&
+         (request.resource.data.role == "admin" || request.resource.data.role == "user")
+        ) ||
+        
+        // 3. Normal users can only modify their own profile data, and cannot self-escalate role or change status
+        (request.auth.uid == userId && 
+         resource.data.role == request.resource.data.role && 
+         resource.data.status == request.resource.data.status
+        )
+      );
+
+      // Only Owner can delete user accounts in Firestore
+      allow delete: if isOwner();
+    }
+  }
+}
